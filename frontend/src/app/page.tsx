@@ -1,113 +1,152 @@
 'use client';
-import { useEffect, useState, useRef, useCallback } from 'react';
-import TinderCard from 'react-tinder-card';
-import { getProfiles, submitVote, Profile } from '@/lib/api';
+import { useState, useEffect, useRef } from 'react';
+import { motion, useMotionValue, useTransform, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
+
+interface Profile {
+  id: string; name: string; photo_url: string;
+  age: number; hot_count: number; not_count: number;
+}
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+function Card({ profile, onVote }: { profile: Profile; onVote: (v: 'hot' | 'not') => void }) {
+  const x = useMotionValue(0);
+  const rotate = useTransform(x, [-220, 220], [-22, 22]);
+  const hotO = useTransform(x, [30, 130], [0, 1]);
+  const notO = useTransform(x, [-130, -30], [1, 0]);
+  const exitX = useRef(0);
+
+  return (
+    <motion.div
+      style={{ x, rotate, position: 'absolute', inset: 0, zIndex: 10 }}
+      drag="x"
+      dragConstraints={{ left: 0, right: 0 }}
+      dragElastic={0.75}
+      onDragEnd={(_, i) => {
+        if (i.offset.x > 80) { exitX.current = 700; onVote('hot'); }
+        else if (i.offset.x < -80) { exitX.current = -700; onVote('not'); }
+      }}
+      exit={{ x: exitX.current, opacity: 0, rotate: exitX.current > 0 ? 30 : -30, transition: { duration: 0.3 } }}
+      className="cursor-grab active:cursor-grabbing select-none"
+      whileTap={{ scale: 1.03 }}
+    >
+      <motion.div style={{ opacity: hotO, position: 'absolute', top: 28, left: 20, zIndex: 20, rotate: -18, pointerEvents: 'none' }}>
+        <span style={{ border: '3px solid #f97316', color: '#f97316', background: 'rgba(249,115,22,0.15)', borderRadius: 14, padding: '6px 14px', fontWeight: 900, fontSize: 22, display: 'block' }}>🔥 HOT</span>
+      </motion.div>
+      <motion.div style={{ opacity: notO, position: 'absolute', top: 28, right: 20, zIndex: 20, rotate: 18, pointerEvents: 'none' }}>
+        <span style={{ border: '3px solid #3b82f6', color: '#3b82f6', background: 'rgba(59,130,246,0.15)', borderRadius: 14, padding: '6px 14px', fontWeight: 900, fontSize: 22, display: 'block' }}>❄️ NOT</span>
+      </motion.div>
+
+      <div style={{ width: '100%', height: '100%', borderRadius: 28, overflow: 'hidden', background: '#0d0d1a', border: '1.5px solid rgba(139,92,246,0.5)', boxShadow: '0 30px 70px rgba(0,0,0,0.8), 0 0 60px rgba(139,92,246,0.12)' }}>
+        <img src={profile.photo_url} alt={profile.name} style={{ width: '100%', height: 320, objectFit: 'cover', display: 'block' }} />
+        <div style={{ padding: '14px 18px', background: 'linear-gradient(to top, #0a0a0f 80%, transparent)' }}>
+          <div style={{ fontWeight: 900, fontSize: 22, color: '#fff' }}>{profile.name}</div>
+          <div style={{ fontSize: 13, color: '#a78bfa', marginTop: 2 }}>{profile.age} years old ✨</div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: 'rgba(249,115,22,0.2)', color: '#fb923c' }}>🔥 {profile.hot_count}</span>
+            <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: 'rgba(59,130,246,0.2)', color: '#60a5fa' }}>❄️ {profile.not_count}</span>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 export default function Home() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [lastVote, setLastVote] = useState<'hot' | 'not' | null>(null);
+  const [idx, setIdx] = useState(0);
   const [hotCount, setHotCount] = useState(0);
   const [notCount, setNotCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [voteFlash, setVoteFlash] = useState<'hot' | 'not' | null>(null);
   const sessionId = useRef(Math.random().toString(36).slice(2));
 
   useEffect(() => {
-    getProfiles().then(data => {
-      setProfiles(data);
-      setCurrentIndex(data.length - 1);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    fetch(`${API}/api/profiles`)
+      .then(r => r.json())
+      .then(d => { setProfiles(d); setLoading(false); })
+      .catch(() => setLoading(false));
   }, []);
 
-  const onSwipe = useCallback(async (direction: string, profile: Profile) => {
-    const vote = direction === 'right' ? 'hot' : 'not';
-    setLastVote(vote);
-    if (vote === 'hot') setHotCount(h => h + 1);
+  const vote = async (v: 'hot' | 'not') => {
+    const profile = profiles[idx];
+    if (!profile) return;
+    setVoteFlash(v);
+    if (v === 'hot') setHotCount(h => h + 1);
     else setNotCount(n => n + 1);
-    setCurrentIndex(i => i - 1);
-    await submitVote(profile.id, vote, sessionId.current);
-    setTimeout(() => setLastVote(null), 800);
-  }, []);
+    setIdx(i => i + 1);
+    setTimeout(() => setVoteFlash(null), 700);
+    try { await fetch(`${API}/api/votes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: profile.id, vote: v, session_id: sessionId.current }) }); } catch {}
+  };
 
-  const swipeLeft = () => {
-    if (currentIndex >= 0 && profiles[currentIndex]) onSwipe('left', profiles[currentIndex]);
-  };
-  const swipeRight = () => {
-    if (currentIndex >= 0 && profiles[currentIndex]) onSwipe('right', profiles[currentIndex]);
-  };
+  const current = profiles[idx];
+  const next = profiles[idx + 1];
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-start pt-6 px-4" style={{ background: 'linear-gradient(135deg, #0a0a0f 0%, #1a0a2e 50%, #0a0a0f 100%)' }}>
-      <div className="w-full max-w-sm flex justify-between items-center mb-6">
+    <main style={{ minHeight: '100dvh', background: 'linear-gradient(135deg, #0a0a0f 0%, #130a24 45%, #0a0a0f 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: 32, position: 'relative', overflow: 'hidden' }}>
+      {/* bg blobs */}
+      <div style={{ position: 'fixed', top: '15%', left: '10%', width: 280, height: 280, borderRadius: '50%', background: '#7c3aed', opacity: 0.07, filter: 'blur(80px)', pointerEvents: 'none' }} />
+      <div style={{ position: 'fixed', bottom: '20%', right: '10%', width: 220, height: 220, borderRadius: '50%', background: '#db2777', opacity: 0.07, filter: 'blur(70px)', pointerEvents: 'none' }} />
+
+      {/* vote flash */}
+      <AnimatePresence>
+        {voteFlash && (
+          <motion.div initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.3 }}
+            style={{ position: 'fixed', top: '30%', left: '50%', transform: 'translateX(-50%)', zIndex: 100, fontSize: 72, pointerEvents: 'none' }}>
+            {voteFlash === 'hot' ? '🔥' : '❄️'}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* header */}
+      <div style={{ width: '100%', maxWidth: 340, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '32px 20px 16px', position: 'relative', zIndex: 10 }}>
         <div>
-          <h1 className="text-3xl font-black text-white">hot or not 🔥</h1>
-          <p className="text-purple-400 text-sm">swipe right = hot • swipe left = not</p>
+          <div style={{ fontWeight: 900, fontSize: 28, background: 'linear-gradient(135deg, #fff 30%, #a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>hot or not 🔥</div>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>swipe right = hot • swipe left = not</div>
         </div>
-        <Link href="/leaderboard" className="px-4 py-2 rounded-full text-sm font-bold" style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.5)', color: '#a78bfa' }}>
-          🏆 Board
-        </Link>
+        <Link href="/leaderboard" style={{ padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.4)', color: '#a78bfa', textDecoration: 'none' }}>🏆 Board</Link>
       </div>
 
-      <div className="flex gap-4 mb-6">
-        <div className="px-5 py-2 rounded-full font-bold text-lg" style={{ background: 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.4)', color: '#fb923c' }}>🔥 {hotCount}</div>
-        <div className="px-5 py-2 rounded-full font-bold text-lg" style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#60a5fa' }}>❄️ {notCount}</div>
+      {/* score */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 24, position: 'relative', zIndex: 10 }}>
+        <motion.div key={`h${hotCount}`} animate={{ scale: [1.25, 1] }} transition={{ duration: 0.2 }} style={{ padding: '6px 18px', borderRadius: 20, fontWeight: 700, background: 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.4)', color: '#fb923c' }}>🔥 {hotCount}</motion.div>
+        <motion.div key={`n${notCount}`} animate={{ scale: [1.25, 1] }} transition={{ duration: 0.2 }} style={{ padding: '6px 18px', borderRadius: 20, fontWeight: 700, background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#60a5fa' }}>❄️ {notCount}</motion.div>
       </div>
 
-      {lastVote && (
-        <div className={`fixed top-20 z-50 text-6xl font-black px-8 py-4 rounded-2xl ${lastVote === 'hot' ? 'text-orange-400' : 'text-blue-400'}`}
-          style={{ background: lastVote === 'hot' ? 'rgba(249,115,22,0.2)' : 'rgba(59,130,246,0.2)', border: `2px solid ${lastVote === 'hot' ? '#fb923c' : '#60a5fa'}` }}>
-          {lastVote === 'hot' ? '🔥 HOT!' : '❄️ NOT'}
-        </div>
-      )}
-
-      <div className="relative w-72 h-96 mb-8">
+      {/* card stack */}
+      <div style={{ position: 'relative', width: 300, height: 440, marginBottom: 32, zIndex: 10 }}>
         {loading ? (
-          <div className="w-72 h-96 rounded-3xl flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
-            <p className="text-purple-400 text-lg animate-pulse">loading... ✨</p>
+          <div style={{ width: 300, height: 440, borderRadius: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(139,92,246,0.2)' }}>
+            <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.5, ease: 'linear' }} style={{ fontSize: 36 }}>✨</motion.div>
+            <div style={{ color: '#a78bfa', fontSize: 14 }}>loading vibes...</div>
           </div>
-        ) : currentIndex < 0 ? (
-          <div className="w-72 h-96 rounded-3xl flex flex-col items-center justify-center gap-4" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>
-            <p className="text-4xl">🎉</p>
-            <p className="text-white font-bold text-xl">you swiped em all!</p>
-            <p className="text-gray-400 text-sm">🔥 {hotCount} hot • ❄️ {notCount} not</p>
-            <button onClick={() => window.location.reload()} className="mt-2 px-6 py-2 rounded-full font-bold text-white" style={{ background: 'linear-gradient(135deg, #8b5cf6, #ec4899)' }}>
-              play again 🔄
-            </button>
+        ) : !current ? (
+          <div style={{ width: 300, height: 440, borderRadius: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(139,92,246,0.2)' }}>
+            <div style={{ fontSize: 56 }}>🎉</div>
+            <div style={{ color: '#fff', fontWeight: 900, fontSize: 20 }}>you swiped em all!</div>
+            <div style={{ color: '#6b7280', fontSize: 13 }}>🔥 {hotCount} hot • ❄️ {notCount} not</div>
+            <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => { setIdx(0); setHotCount(0); setNotCount(0); }} style={{ marginTop: 8, padding: '10px 24px', borderRadius: 24, fontWeight: 700, color: '#fff', background: 'linear-gradient(135deg, #8b5cf6, #ec4899)', border: 'none', cursor: 'pointer', fontSize: 14 }}>play again 🔄</motion.button>
           </div>
         ) : (
-          profiles.map((profile, index) => (
-            index <= currentIndex && index >= currentIndex - 2 ? (
-              <TinderCard key={profile.id} onSwipe={(dir) => onSwipe(dir, profile)} preventSwipe={['up', 'down']} className="absolute">
-                <div className="w-72 h-96 rounded-3xl overflow-hidden cursor-grab active:cursor-grabbing select-none"
-                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(139,92,246,0.3)', boxShadow: '0 25px 50px rgba(0,0,0,0.5), 0 0 30px rgba(139,92,246,0.1)', transform: `scale(${1 - (currentIndex - index) * 0.04}) translateY(${(currentIndex - index) * 10}px)`, zIndex: index }}>
-                  <img src={profile.photo_url} alt={profile.name} className="w-full h-72 object-cover" />
-                  <div className="p-4" style={{ background: 'linear-gradient(to top, rgba(10,10,15,0.95), transparent)' }}>
-                    <h2 className="text-white font-black text-xl">{profile.name}</h2>
-                    <p className="text-purple-400 text-sm">{profile.age} years old ✨</p>
-                    <div className="flex gap-2 mt-1">
-                      <span className="text-xs px-2 py-1 rounded-full" style={{ background: 'rgba(249,115,22,0.2)', color: '#fb923c' }}>🔥 {profile.hot_count}</span>
-                      <span className="text-xs px-2 py-1 rounded-full" style={{ background: 'rgba(59,130,246,0.2)', color: '#60a5fa' }}>❄️ {profile.not_count}</span>
-                    </div>
-                  </div>
-                </div>
-              </TinderCard>
-            ) : null
-          ))
+          <>
+            {next && <div style={{ position: 'absolute', inset: 0, borderRadius: 28, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(139,92,246,0.15)', transform: 'scale(0.93) translateY(14px)', zIndex: 1 }} />}
+            <AnimatePresence mode="wait">
+              <Card key={current.id} profile={current} onVote={vote} />
+            </AnimatePresence>
+          </>
         )}
       </div>
 
-      {!loading && currentIndex >= 0 && (
-        <div className="flex gap-6">
-          <button onClick={swipeLeft} className="w-16 h-16 rounded-full text-2xl font-bold flex items-center justify-center transition-transform hover:scale-110 active:scale-95"
-            style={{ background: 'rgba(59,130,246,0.15)', border: '2px solid rgba(59,130,246,0.5)', color: '#60a5fa', boxShadow: '0 0 20px rgba(59,130,246,0.2)' }}>❄️</button>
-          <button onClick={swipeRight} className="w-16 h-16 rounded-full text-2xl font-bold flex items-center justify-center transition-transform hover:scale-110 active:scale-95"
-            style={{ background: 'rgba(249,115,22,0.15)', border: '2px solid rgba(249,115,22,0.5)', color: '#fb923c', boxShadow: '0 0 20px rgba(249,115,22,0.2)' }}>🔥</button>
+      {/* buttons */}
+      {!loading && current && (
+        <div style={{ display: 'flex', gap: 32, position: 'relative', zIndex: 10 }}>
+          <motion.button whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.88 }} onClick={() => vote('not')} style={{ width: 64, height: 64, borderRadius: '50%', fontSize: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(59,130,246,0.15)', border: '2px solid rgba(59,130,246,0.5)', boxShadow: '0 0 24px rgba(59,130,246,0.25)', cursor: 'pointer' }}>❄️</motion.button>
+          <motion.button whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.88 }} onClick={() => vote('hot')} style={{ width: 64, height: 64, borderRadius: '50%', fontSize: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(249,115,22,0.15)', border: '2px solid rgba(249,115,22,0.5)', boxShadow: '0 0 24px rgba(249,115,22,0.25)', cursor: 'pointer' }}>🔥</motion.button>
         </div>
       )}
 
-      <p className="text-gray-600 text-xs mt-6">built by ahum ai 🐾</p>
+      <div style={{ fontSize: 11, color: '#374151', marginTop: 24, position: 'relative', zIndex: 10 }}>built by ahum ai 🐾</div>
     </main>
   );
 }
